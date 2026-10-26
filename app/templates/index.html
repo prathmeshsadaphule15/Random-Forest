@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ad Click Prediction · Random Forest</title>
+  <meta name="description" content="Predicting online ad clicks with a Random Forest classifier — analysis, tuning, evaluation and live prediction.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231B2430'/%3E%3Cpath d='M16 7l6 9h-4l5 7H9l5-7h-4z' fill='%23E2B36B'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+
+<div class="loader" id="loader" aria-hidden="true">
+  <div class="loader-mark">
+    <svg viewBox="0 0 40 40" width="40" height="40"><path class="loader-path" d="M20 6l8 12h-5l7 10H10l7-10h-5z"/></svg>
+  </div>
+  <div class="loader-text" id="loaderText">Loading model results</div>
+  <div class="loader-bar"><i id="loaderFill"></i></div>
+</div>
+
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#26313F"/><path d="M16 7l6 9h-4l5 7H9l5-7h-4z" fill="#E2B36B"/></svg>
+    </div>
+    <div>
+      <div class="brand-title">ClickForest</div>
+      <div class="brand-sub">ML Mini Project · No. 34</div>
+    </div>
+  </div>
+
+  <nav class="nav" id="nav" aria-label="Sections">
+    <a href="#overview" class="nav-link"><span class="nav-num">01</span>Overview</a>
+    <a href="#dataset" class="nav-link"><span class="nav-num">02</span>Dataset</a>
+    <a href="#explore" class="nav-link"><span class="nav-num">03</span>Exploration</a>
+    <a href="#prep" class="nav-link"><span class="nav-num">04</span>Preprocessing</a>
+    <a href="#forest" class="nav-link"><span class="nav-num">05</span>The Forest</a>
+    <a href="#tuning" class="nav-link"><span class="nav-num">06</span>Tuning</a>
+    <a href="#evaluation" class="nav-link"><span class="nav-num">07</span>Evaluation</a>
+    <a href="#comparison" class="nav-link"><span class="nav-num">08</span>Comparison</a>
+    <a href="#predict" class="nav-link"><span class="nav-num">09</span>Live Predictor</a>
+    <a href="#insights" class="nav-link"><span class="nav-num">10</span>Insights</a>
+    <span class="nav-indicator" id="navIndicator"></span>
+  </nav>
+
+  <div class="sidebar-foot">
+    <div class="foot-row"><span>Dataset</span><span>Advertising (1,000)</span></div>
+    <div class="foot-row"><span>Model</span><span id="footModel">Random Forest</span></div>
+    <div class="foot-row"><span>Split</span><span>750 / 250</span></div>
+  </div>
+</aside>
+
+<button class="menu-btn" id="menuBtn" aria-label="Open navigation">
+  <span></span><span></span><span></span>
+</button>
+
+<main class="main">
+  <div class="progress" id="progress"></div>
+
+  <!-- 01 OVERVIEW ======================================================= -->
+  <section id="overview" class="section hero">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <div class="eyebrow reveal">Machine Learning · Ensemble Classification</div>
+        <h1 class="reveal">Predicting online ad clicks with a Random Forest</h1>
+        <p class="lede reveal">
+          An advertiser pays for every impression, but only some users click. This project
+          learns, from 1,000 logged ad impressions, which user and session traits signal a
+          click, and turns that into a model that scores a new visitor in milliseconds.
+        </p>
+        <dl class="hero-facts reveal">
+          <div><dt>Data</dt><dd>1,000 impressions · 2016</dd></div>
+          <div><dt>Validation</dt><dd>5-fold CV + held-out test</dd></div>
+          <div><dt>Baselines</dt><dd>8 competing algorithms</dd></div>
+        </dl>
+        <div class="hero-actions reveal">
+          <a class="btn" href="#predict">Try the live predictor</a>
+          <a class="btn ghost" href="#evaluation">See the evaluation</a>
+        </div>
+      </div>
+
+      <figure class="card hero-viz reveal">
+        <div class="card-head">
+          <h3>What the forest has learned</h3>
+          <span class="chip chip-accent">P(click)</span>
+        </div>
+        <div class="surface-box"><canvas id="heroSurface" aria-label="Predicted click probability across time on site and internet usage"></canvas></div>
+        <figcaption class="surface-legend">
+          <span class="grad-legend"><span>0</span><i></i><span>1</span></span>
+          <span><i class="dot" style="background:var(--c0)"></i>Not clicked</span>
+          <span><i class="dot" style="background:var(--c1)"></i>Clicked</span>
+          <span><i class="dash-key"></i>Boundary (P = 0.5)</span>
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="kpis reveal" id="kpis"></div>
+
+    <div class="card pipeline reveal">
+      <div class="card-head">
+        <h3>Pipeline</h3>
+        <span class="muted small">From raw log to prediction</span>
+      </div>
+      <div class="flow-wrap"><span class="flow-packet" aria-hidden="true"></span>
+      <ol class="flow" id="flow">
+        <li><span class="flow-num">1</span><b>Raw log</b><small>1,000 rows · 10 columns</small></li>
+        <li><span class="flow-num">2</span><b>Feature build</b><small>9 model inputs</small></li>
+        <li><span class="flow-num">3</span><b>Stratified split</b><small>750 train · 250 test</small></li>
+        <li><span class="flow-num">4</span><b>Randomized search</b><small>60 configs × 5 folds</small></li>
+        <li><span class="flow-num">5</span><b>Forest</b><small id="flowTrees">— trees</small></li>
+        <li><span class="flow-num">6</span><b>Vote</b><small>P(click) ≥ 0.5</small></li>
+      </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 DATASET ======================================================== -->
+  <section id="dataset" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">02</span>
+      <div>
+        <h2>Dataset understanding</h2>
+        <p class="section-lede">Each row is one ad impression: who saw it, when, and whether they clicked.</p>
+      </div>
+    </header>
+
+    <div class="grid g-3-1">
+      <div class="card reveal">
+        <div class="card-head"><h3>Column dictionary</h3><span class="muted small" id="colSummary"></span></div>
+        <div class="table-wrap"><table class="table" id="colTable"></table></div>
+      </div>
+      <div class="stack">
+        <div class="card reveal">
+          <div class="card-head"><h3>Target balance</h3></div>
+          <div id="balance"></div>
+          <p class="note">A 50 / 50 split means accuracy is a fair headline metric and no resampling is needed.</p>
+        </div>
+        <div class="card reveal">
+          <div class="card-head"><h3>Quality checks</h3></div>
+          <ul class="checks" id="checks"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card reveal">
+      <div class="card-head">
+        <h3>Records</h3>
+        <div class="table-tools">
+          <input type="search" id="recSearch" class="input" placeholder="Search city, country, topic…" aria-label="Search records">
+          <div class="seg" id="recFilter" role="group" aria-label="Filter by outcome">
+            <button data-v="all" class="on">All</button><button data-v="1">Clicked</button><button data-v="0">Not clicked</button>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap"><table class="table table-data" id="recTable"></table></div>
+      <div class="pager" id="recPager"></div>
+    </div>
+  </section>
+
+  <!-- 03 EXPLORATION ==================================================== -->
+  <section id="explore" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">03</span>
+      <div>
+        <h2>Exploratory analysis</h2>
+        <p class="section-lede">Before modelling: how does each trait differ between users who click and users who don't?</p>
+      </div>
+    </header>
+
+    <div class="card reveal">
+      <div class="card-head">
+        <h3>Distribution by outcome</h3>
+        <div class="seg" id="histTabs" role="tablist"></div>
+      </div>
+      <div class="legend" data-legend="class"></div>
+      <div class="chart-box h-300"><canvas id="histChart"></canvas></div>
+      <p class="note" id="histNote"></p>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Time on site vs. internet usage</h3><span class="muted small">400-row sample</span></div>
+        <div class="legend" data-legend="class"></div>
+        <div class="chart-box h-300"><canvas id="scatterChart"></canvas></div>
+        <p class="note">The two classes sit in nearly separate corners. Clickers spend little time online and little time on the site.</p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Click rate by age band</h3></div>
+        <div class="chart-box h-300"><canvas id="ageChart"></canvas></div>
+        <p class="note" id="ageNote"></p>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Correlation matrix</h3><span class="muted small">Pearson r, model features + target</span></div>
+        <div id="heatmap" class="heatmap"></div>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Click rate by hour of day</h3></div>
+        <div class="chart-box h-260"><canvas id="hourChart"></canvas></div>
+        <p class="note">Hour of day shows no clear pattern. Swings come from small hourly samples (≈40 rows each), not real timing effects, which the model later confirms.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 PREPROCESSING ================================================== -->
+  <section id="prep" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">04</span>
+      <div>
+        <h2>Preprocessing</h2>
+        <p class="section-lede">Every step is fitted on the training split only, then replayed on test data and on live inputs.</p>
+      </div>
+    </header>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <!-- 05 FOREST ========================================================= -->
+  <section id="forest" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">05</span>
+      <div>
+        <h2>How the forest decides</h2>
+        <p class="section-lede">Many shallow-to-medium trees, each trained on a different bootstrap sample and a random subset of features, vote on every prediction.</p>
+      </div>
+    </header>
+
+    <div class="card reveal">
+      <div class="card-head"><h3>Bagging, step by step</h3><button class="btn ghost small" id="replayBag">Replay</button></div>
+      <div class="bagging" id="bagging"></div>
+    </div>
+
+    <div class="card reveal">
+      <div class="card-head">
+        <h3>Watch the boundary form as trees are added</h3>
+        <div class="table-tools">
+          <div class="seg" id="growTabs"></div>
+          <button class="btn ghost small" id="growPlay" type="button">▶ Play</button>
+        </div>
+      </div>
+      <div class="grid g-grow">
+        <div class="surface-box tall"><canvas id="growSurface" aria-label="Decision surface for a growing number of trees"></canvas></div>
+        <div class="grow-side">
+          <div class="grow-count"><span id="growN">167</span><small id="growUnit">trees</small></div>
+          <div class="grow-meter"><div class="grow-meter-fill" id="growFill"></div></div>
+          <p class="grow-text" id="growText"></p>
+          <div class="grow-stat"><span>Map area with a confident 0/1 answer</span><b id="growSure">—</b></div>
+          <div class="grow-stat"><span>Map area in the uncertain 0.2–0.8 band</span><b id="growUnsure">—</b></div>
+          <p class="small muted" id="growFixed"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card reveal">
+      <div class="card-head">
+        <h3>Tree #1 of the tuned forest</h3>
+        <span class="muted small" id="treeMeta"></span>
+      </div>
+      <div class="tree-wrap"><svg id="treeSvg" class="tree-svg" role="img" aria-label="Top levels of one decision tree"></svg></div>
+      <p class="note">Showing the first three levels. Each box shows the split rule, the number of bootstrap samples that reach it, and the share of clickers among them (bar). Left branch = rule is true.</p>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Built from scratch vs. scikit-learn</h3></div>
+        <p class="small muted" style="margin-top:-4px">Same settings: 100 trees, √p features per split, Gini, unlimited depth.</p>
+        <table class="table compact" id="scratchTable"></table>
+        <p class="note" id="scratchNote"></p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Feature importance agreement</h3></div>
+        <div class="legend" data-legend="impl"></div>
+        <div class="chart-box h-300"><canvas id="impAgreeChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 TUNING ========================================================= -->
+  <section id="tuning" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">06</span>
+      <div>
+        <h2>Hyperparameter tuning</h2>
+        <p class="section-lede" id="tuneLede"></p>
+      </div>
+    </header>
+
+    <div class="grid g-1-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Search space</h3></div>
+        <table class="table compact" id="spaceTable"></table>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Selected configuration</h3><span class="chip chip-accent" id="bestAuc"></span></div>
+        <div class="params" id="bestParams"></div>
+        <p class="note" id="bestNote"></p>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Out-of-bag error vs. number of trees</h3></div>
+        <div class="chart-box h-260"><canvas id="oobChart"></canvas></div>
+        <p class="note">Error falls quickly and flattens after ~150 trees. Adding more costs time but buys no accuracy.</p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head">
+          <h3>Validation curve</h3>
+          <div class="seg" id="vcTabs">
+            <button data-k="depth_curve" class="on">max_depth</button>
+            <button data-k="features_curve">max_features</button>
+            <button data-k="leaf_curve">min_samples_leaf</button>
+          </div>
+        </div>
+        <div class="legend" data-legend="fit"></div>
+        <div class="chart-box h-260"><canvas id="vcChart"></canvas></div>
+        <p class="note" id="vcNote"></p>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Learning curve</h3></div>
+        <div class="legend" data-legend="fit"></div>
+        <div class="chart-box h-260"><canvas id="lcChart"></canvas></div>
+        <p class="note">Training and validation accuracy converge as data grows, so the model is not memorising. More rows would add only small gains.</p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Top 8 of 60 sampled configurations</h3></div>
+        <div class="table-wrap"><table class="table compact" id="trialsTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 EVALUATION ===================================================== -->
+  <section id="evaluation" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">07</span>
+      <div>
+        <h2>Evaluation on the held-out test set</h2>
+        <p class="section-lede">250 rows the model never saw during training or tuning. Drag the threshold to watch every metric respond.</p>
+      </div>
+    </header>
+
+    <div class="card reveal threshold-card">
+      <div class="threshold">
+        <label for="thr">Decision threshold</label>
+        <input type="range" id="thr" min="0.05" max="0.95" step="0.01" value="0.5">
+        <output id="thrOut">0.50</output>
+        <button class="btn ghost small" id="thrReset">Reset</button>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>Confusion matrix</h3><span class="muted small">n = 250</span></div>
+        <div class="cm" id="cm"></div>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Metrics, calculated by hand</h3></div>
+        <div class="calc" id="calc"></div>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>ROC curve</h3><span class="chip" id="aucChip"></span></div>
+        <div class="chart-box h-300"><canvas id="rocChart"></canvas></div>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Precision–recall curve</h3><span class="chip" id="prChip"></span></div>
+        <div class="chart-box h-300"><canvas id="prChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head">
+          <h3>Feature importance</h3>
+          <div class="seg" id="impTabs">
+            <button data-k="perm" class="on">Permutation</button><button data-k="mdi">Impurity (MDI)</button>
+          </div>
+        </div>
+        <div class="chart-box h-300"><canvas id="impChart"></canvas></div>
+        <p class="note" id="impNote"></p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head">
+          <h3>Partial dependence</h3>
+          <div class="seg" id="pdpTabs"></div>
+        </div>
+        <div class="chart-box h-300"><canvas id="pdpChart"></canvas></div>
+        <p class="note">Average predicted click probability as one feature is swept while all others keep their real values.</p>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>5-fold cross-validation (training set)</h3></div>
+        <table class="table compact" id="foldTable"></table>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>Misclassified test rows</h3><span class="muted small" id="missCount"></span></div>
+        <div class="table-wrap"><table class="table compact" id="missTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 COMPARISON ===================================================== -->
+  <section id="comparison" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">08</span>
+      <div>
+        <h2>Comparison with other algorithms</h2>
+        <p class="section-lede">Nine models, identical features and split. Honest result: on this dataset the top models are statistically tied.</p>
+      </div>
+    </header>
+
+    <div class="card reveal">
+      <div class="card-head"><h3>Test accuracy with 95% confidence interval</h3><span class="muted small">Wilson interval, n = 250</span></div>
+      <div id="ciPlot" class="ci-plot"></div>
+    </div>
+
+    <div class="card reveal">
+      <div class="card-head"><h3>Full scorecard</h3><span class="muted small">Click a column to sort</span></div>
+      <div class="table-wrap"><table class="table compact sortable" id="cmpTable"></table></div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card reveal">
+        <div class="card-head"><h3>ROC: forest vs. linear vs. single tree</h3></div>
+        <div class="legend" data-legend="roc3"></div>
+        <div class="chart-box h-300"><canvas id="roc3Chart"></canvas></div>
+      </div>
+      <div class="card reveal prose">
+        <div class="card-head"><h3>Why the results look like this</h3></div>
+        <div id="cmpText"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 09 PREDICT ======================================================== -->
+  <section id="predict" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">09</span>
+      <div>
+        <h2>Live predictor</h2>
+        <p class="section-lede">Describe a visitor. The tuned forest scores them, and you can see how every tree voted.</p>
+      </div>
+    </header>
+
+    <div class="grid g-predict">
+      <div class="card reveal">
+        <div class="card-head">
+          <h3>Visitor profile</h3>
+          <div class="presets" id="presets"></div>
+        </div>
+        <form id="predictForm" class="form" autocomplete="off"></form>
+      </div>
+
+      <div class="stack">
+        <div class="card reveal result" id="result">
+          <div class="card-head"><h3>Prediction</h3><div class="verdict" id="verdict">—</div></div>
+          <div class="gauge">
+            <svg viewBox="0 0 240 140" aria-hidden="true">
+              <path class="g-track" d="M30,120 A90,90 0 0 1 210,120"/>
+              <path class="g-val" id="gVal" d="M30,120 A90,90 0 0 1 210,120" pathLength="100"/>
+              <g class="g-ticks">
+                <line x1="30" y1="120" x2="40" y2="120"/><line x1="56.4" y1="56.4" x2="63.4" y2="63.4"/>
+                <line x1="120" y1="30" x2="120" y2="44"/><line x1="183.6" y1="56.4" x2="176.6" y2="63.4"/>
+                <line x1="210" y1="120" x2="200" y2="120"/>
+              </g>
+              <text class="g-lbl" x="30" y="136" text-anchor="middle">0</text>
+              <text class="g-lbl" x="120" y="22" text-anchor="middle">0.5</text>
+              <text class="g-lbl" x="210" y="136" text-anchor="middle">1</text>
+              <g id="gNeedle" class="g-needle"><line x1="120" y1="120" x2="120" y2="48"/><circle cx="120" cy="120" r="6"/></g>
+            </svg>
+            <div class="gauge-center"><div class="prob" id="prob">—</div><div class="muted small">probability of a click</div></div>
+          </div>
+          <div class="result-stats" id="resultStats"></div>
+        </div>
+        <div class="card reveal">
+          <div class="card-head"><h3>How each tree voted</h3><span class="muted small" id="voteCount"></span></div>
+          <div class="votes" id="votes"></div>
+          <div class="legend legend-votes">
+            <span><i class="sw sw-0"></i>Tree predicts no click</span>
+            <span><i class="sw sw-1"></i>Tree predicts click</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card reveal">
+      <div class="card-head">
+        <h3>What-if: change one input, hold the rest</h3>
+        <div class="seg" id="whatifTabs"></div>
+      </div>
+      <div class="chart-box h-260"><canvas id="whatifChart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- 10 INSIGHTS ======================================================= -->
+  <section id="insights" class="section">
+    <header class="section-head reveal">
+      <span class="section-num">10</span>
+      <div>
+        <h2>Interpretation &amp; business insights</h2>
+        <p class="section-lede">What the model says about who clicks, and what an ad team could do with it.</p>
+      </div>
+    </header>
+    <div class="grid g-3" id="insightCards"></div>
+    <div class="grid g-2">
+      <div class="card reveal prose">
+        <div class="card-head"><h3>Recommendations</h3></div>
+        <ol class="recs" id="recs"></ol>
+      </div>
+      <div class="card reveal prose">
+        <div class="card-head"><h3>Limitations &amp; next steps</h3></div>
+        <ul class="limits" id="limits"></ul>
+      </div>
+    </div>
+    <footer class="footer">
+      <span>Mini Project 34 · Predict online ad clicks using Random Forest</span>
+      <span>Python · scikit-learn · NumPy · Flask</span>
+    </footer>
+  </section>
+</main>
+
+<div class="tooltip" id="tip" role="tooltip"></div>
+
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/surface.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
